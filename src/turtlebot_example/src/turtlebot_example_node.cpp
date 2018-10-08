@@ -31,8 +31,10 @@ void pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg
 	//This function is called when a new position message is received
 
 	double X = msg->pose.pose.position.x; // Robot X psotition
-	double Y = msg->pose.pose.position.y; // Robot Y psotition
+	double Y = msg->pose.pose.position.y; // Robot Y psotition 
  	double Yaw = tf::getYaw(msg->pose.pose.orientation); // Robot Yaw
+
+    ROS_INFO("\nX - %.5f\nY - %.5f\nYaw - %.5f", X, Y, Yaw);
 
 }
 
@@ -48,7 +50,7 @@ int main(int argc, char **argv)
     ros::Subscriber pose_sub = n.subscribe("/amcl_pose", 1, pose_callback);
 
     //Setup topics to Publish from this node
-    ros::Publisher velocity_publisher = n.advertise<geometry_msgs::Twist>("/cmd_vel", 1);
+    ros::Publisher velocity_publisher = n.advertise<geometry_msgs::Twist>("/cmd_vel_mux/input/teleop", 1);
     
     //Velocity control variable
     geometry_msgs::Twist vel;
