@@ -13,7 +13,7 @@
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <geometry_msgs/Twist.h>
 #include <tf/transform_datatypes.h>
-
+#include <cmath>
 
 //Callback function for the Position topic 
 //void pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
@@ -26,6 +26,18 @@
 
 //}
 
+// Before starting to turn, capture yaw value
+double initial_yaw = 0;
+
+// Store current yaw value here in every callback
+double current_yaw = 0;
+
+// Used to count how many interations of the loop have passed
+int loopCount = 0;
+
+// If true, the robot is turning 90 degrees. Else, moving linearly
+bool isTurning = false;
+
 void pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
 {
 	//This function is called when a new position message is received
@@ -33,16 +45,15 @@ void pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg
 	double X = msg->pose.pose.position.x; // Robot X psotition
 	double Y = msg->pose.pose.position.y; // Robot Y psotition 
  	double Yaw = tf::getYaw(msg->pose.pose.orientation); // Robot Yaw
-
-    ROS_INFO("\nX - %.5f\nY - %.5f\nYaw - %.5f", X, Y, Yaw);
-
+	
+	current_yaw = Yaw;
 }
 
 
 
 int main(int argc, char **argv)
 {
-	//Initialize the ROS framework
+    //Initialize the ROS framework
     ros::init(argc,argv,"main_control");
     ros::NodeHandle n;
 
@@ -65,8 +76,43 @@ int main(int argc, char **argv)
     
     	//Main loop code goes here:
 
-    	vel.linear.x = 0.2; // set linear speed
-    	vel.angular.z = 0.2; // set angular speed
+	// Linear motion
+	if (!isTurning)
+	{
+		vel.linear.x = 0.2;
+		vel.angular.z = 0;
+		loopCount++;
+
+		// Stop linear motion, start turning at this point
+		// Change 100 value to change side length
+		if (loopCount % 100 == 0)
+		{
+			initial_yaw = current_yaw;
+			isTurning = true;
+		}
+	}
+	else // Turning motion
+	{
+		vel.linear.x = 0;
+		vel.angular.z = 0.2;
+
+		// The yaw value goes from -PI to +PI, need to account for this
+		// Turn 90 degrees (PI/2 rads) every time to form square
+		if (initial_yaw > current_yaw)
+		{
+			if ((2 * M_PI + current_yaw - initial_yaw) > (M_PI/2.0))
+			{
+				isTurning = false;
+			}
+		}
+		else
+		{
+			if (std::abs(initial_yaw - current_yaw) > (M_PI/2.0))
+			{
+				isTurning = false;
+			}
+		}
+	}
 
     	velocity_publisher.publish(vel); // Publish the command velocity
     }
