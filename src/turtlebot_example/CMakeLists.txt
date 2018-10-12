@@ -93,6 +93,8 @@ catkin_package(
 ## Build ##
 ###########
 
+set(CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
+
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
 # include_directories(include)
@@ -107,6 +109,7 @@ include_directories(
 
 ## Declare a cpp executable
  add_executable(turtlebot_example_node src/turtlebot_example_node.cpp)
+ add_executable(turtlebot_square_node src/turtlebot_square_node.cpp)
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
@@ -114,6 +117,10 @@ include_directories(
 
 ## Specify libraries to link a library or executable target against
  target_link_libraries(turtlebot_example_node
+   ${catkin_LIBRARIES}
+ )
+
+  target_link_libraries(turtlebot_square_node
    ${catkin_LIBRARIES}
  )
 
