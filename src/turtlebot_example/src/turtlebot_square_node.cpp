@@ -28,26 +28,28 @@
 //}
 
 std::mutex g_mtx;
-bool new_data = false;
+
 enum states:u_int16_t
 {
-	X_POS,
 	TURN_0,
+	Y_NEG,
 	TURN_90,
-	Y_POS,
+	X_POS,
 	TURN_180,
-	X_NEG,
+	Y_POS,
 	TURN_270,
-	Y_NEG
+	X_NEG,
 };
 
 double current_x = 0;
 double current_y = 0;
 double current_yaw = 0;
+volatile bool started = false;
 
 void pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
 {
 	//This function is called when a new position message is received
+	started = true;
 	// g_mtx.lock();
 	current_x = msg->pose.pose.position.x; // Robot X psotition
 	current_y = msg->pose.pose.position.y; // Robot Y psotition 
@@ -60,7 +62,7 @@ void pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg
 
 float set_yaw(float target, float current)
 {
-	static float kp = 1.5;
+	static float kp = 0.7;
 	float error = target - current;
 	float control = kp * error;
 
@@ -83,7 +85,7 @@ int main(int argc, char **argv)
     ros::NodeHandle n;
 
     //Subscribe to the desired topics and assign callbacks
-    ros::Subscriber pose_sub = n.subscribe("/amcl_pose", 1, pose_callback);
+    ros::Subscriber pose_sub = n.subscribe("/indoor_pos", 1, pose_callback);
 
     //Setup topics to Publish from this node
     ros::Publisher velocity_publisher = n.advertise<geometry_msgs::Twist>("/cmd_vel_mux/input/teleop", 1);
@@ -94,10 +96,11 @@ int main(int argc, char **argv)
     //Set the loop rate
     ros::Rate loop_rate(20);    //20Hz update rate
 
-	static const double width = 2;
+	static const double width = 1;
 	double target_pos = 0;
 	u_int16_t current_state = TURN_0;
-
+	int loopCount = 0;
+	
     while (ros::ok())
     {
     	loop_rate.sleep(); //Maintain the loop rate
@@ -106,7 +109,7 @@ int main(int argc, char **argv)
 		double linear_ctrl = 0;
 		double angular_ctrl = 0;
 		// g_mtx.lock();
-
+		if(!started) continue;
 		// if(!new_data)
 		// {
 		// 	g_mtx.unlock();
@@ -116,42 +119,59 @@ int main(int argc, char **argv)
 		switch(current_state)
 		{
 			case TURN_0:
+				// ROS_INFO("here");
 				linear_ctrl = 0;
 				angular_ctrl = set_yaw(0, current_yaw);
-				if(fabs(current_yaw) < 0.008)
+				if(fabs(current_yaw) < 0.1)
 				{
-					current_state = X_POS;
-					target_pos = current_x + width;
+					current_state = Y_NEG;
+					target_pos = current_y - width;
 					ROS_INFO("Switching from [%d] to [%d]", TURN_0, current_state);
 				}
 				break;
-			case X_POS:
-				linear_ctrl = set_pos(target_pos, current_x);
+			case Y_NEG:
+				linear_ctrl = 0.2;
 				angular_ctrl = set_yaw(0, current_yaw);
-				if(fabs(target_pos - current_x) < 0.1)
+				loopCount++;
+				if (loopCount % 100 == 0)
 				{
+					ROS_INFO("starting turning\n");
 					current_state = TURN_90;
-					ROS_INFO("Switching from [%d] to [%d]", X_POS, current_state);
 				}
+				// linear_ctrl = fabs(set_pos(target_pos, current_y));
+				// angular_ctrl = set_yaw(0, current_yaw);
+				// if(fabs(target_pos - current_y) < 0.1)
+				// {
+				// 	current_state = TURN_90;
+				// 	ROS_INFO("Switching from [%d] to [%d]", Y_NEG, current_state);
+				// }
 				break;
 			case TURN_90:
 				linear_ctrl = 0;
 				angular_ctrl = set_yaw(1.5708, current_yaw);
-				if(fabs(current_yaw - 1.5708) < 0.008)
+				if(fabs(current_yaw - 1.5708) < 0.1)
 				{
-					current_state = Y_POS;
-					target_pos = current_y + width;
+					current_state = X_POS;
+					target_pos = current_x + width;
 					ROS_INFO("Switching from [%d] to [%d]", TURN_90, current_state);
 				}
 				break;
-			case Y_POS:
-				linear_ctrl = set_pos(target_pos, current_y);
+			case X_POS:
+				linear_ctrl = 0.2;
 				angular_ctrl = set_yaw(1.5708, current_yaw);
-				if(fabs(target_pos - current_y) < 0.1)
+				loopCount++;
+				if (loopCount % 100 == 0)
 				{
+					ROS_INFO("starting turning\n");
 					current_state = TURN_180;
-					ROS_INFO("Switching from [%d] to [%d]", Y_POS, current_state);
 				}
+				// linear_ctrl = fabs(set_pos(target_pos, current_x));
+				// angular_ctrl = set_yaw(1.5708, current_yaw);
+				// if(fabs(target_pos - current_x) < 0.1)
+				// {
+				// 	current_state = TURN_180;
+				// 	ROS_INFO("Switching from [%d] to [%d]", X_POS, current_state);
+				// }
 				break;
 			case TURN_180:
 				linear_ctrl = 0;
@@ -161,47 +181,63 @@ int main(int argc, char **argv)
 				{
 					angular_ctrl *= -1;
 				}
-				if(fabs(fabs(current_yaw) - 3.14159) < 0.008)
+				if(fabs(fabs(current_yaw) - 3.14159) < 0.1)
 				{
-					current_state = X_NEG;
-					target_pos = current_x - width;
+					current_state = Y_POS;
+					target_pos = current_y + width;
 					ROS_INFO("Switching from [%d] to [%d]", TURN_180, current_state);
 				}
 				break;
-			case X_NEG:
-				linear_ctrl = fabs(set_pos(target_pos, current_x));
+			case Y_POS:
+				linear_ctrl = 0.2;
 				angular_ctrl = set_yaw(3.14159, fabs(current_yaw));
-				if(fabs(target_pos - current_x) < 0.1)
+				loopCount++;
+				if (loopCount % 100 == 0)
 				{
+					ROS_INFO("starting turning\n");
 					current_state = TURN_270;
-					ROS_INFO("Switching from [%d] to [%d]", X_NEG, current_state);
 				}
+				// linear_ctrl = set_pos(target_pos, current_y);
+				// angular_ctrl = set_yaw(3.14159, fabs(current_yaw));
+				// if(fabs(target_pos - current_y) < 0.1)
+				// {
+				// 	current_state = TURN_270;
+				// 	ROS_INFO("Switching from [%d] to [%d]", Y_POS, current_state);
+				// }
 				break;
 			case TURN_270:
 				linear_ctrl = 0;
 				angular_ctrl = set_yaw(-1.5708, current_yaw);
-				if(fabs(current_yaw + 1.5708) < 0.008)
+				if(fabs(current_yaw + 1.5708) < 0.1)
 				{
-					current_state = Y_NEG;
-					target_pos = current_y - width;
+					current_state = X_NEG;
+					target_pos = current_x - width;
 					ROS_INFO("Switching from [%d] to [%d]", TURN_270, current_state);
 				}
 				break;
-			case Y_NEG:
-				linear_ctrl = fabs(set_pos(target_pos, current_y));
+			case X_NEG:
+				linear_ctrl = 0.2;
 				angular_ctrl = set_yaw(-1.5708, current_yaw);
-				if(fabs(target_pos - current_y) < 0.1)
+				loopCount++;
+				if (loopCount % 100 == 0)
 				{
+					ROS_INFO("starting turning\n");
 					current_state = TURN_0;
-					ROS_INFO("Switching from [%d] to [%d]", Y_NEG, current_state);
 				}
+				// linear_ctrl = fabs(set_pos(target_pos, current_x));
+				// angular_ctrl =  set_yaw(-1.5708, current_yaw);
+				// if(fabs(target_pos - current_x) < 0.1)
+				// {
+				// 	current_state = TURN_0;
+				// 	ROS_INFO("Switching from [%d] to [%d]", X_NEG, current_state);
+				// }
 				break;
 			default:
 				linear_ctrl = 0.0;
 				angular_ctrl = 0.0;
 				break;
 		}
-		new_data = false;
+		// new_data = false;
 		// g_mtx.unlock();
     	//Main loop code goes here:
 		vel.linear.x = linear_ctrl;

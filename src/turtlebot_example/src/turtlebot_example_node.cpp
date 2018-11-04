@@ -28,6 +28,7 @@
 
 // Before starting to turn, capture yaw value
 double initial_yaw = 0;
+double target_yaw = 0;
 
 // Store current yaw value here in every callback
 double current_yaw = 0;
@@ -47,6 +48,7 @@ void pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg
  	double Yaw = tf::getYaw(msg->pose.pose.orientation); // Robot Yaw
 	
 	current_yaw = Yaw;
+	ROS_INFO("x : %.4f | y : %.4f | yaw : %.4f", X, Y, current_yaw);
 }
 
 
@@ -58,7 +60,7 @@ int main(int argc, char **argv)
     ros::NodeHandle n;
 
     //Subscribe to the desired topics and assign callbacks
-    ros::Subscriber pose_sub = n.subscribe("/amcl_pose", 1, pose_callback);
+    ros::Subscriber pose_sub = n.subscribe("/indoor_pos", 1, pose_callback);
 
     //Setup topics to Publish from this node
     ros::Publisher velocity_publisher = n.advertise<geometry_msgs::Twist>("/cmd_vel_mux/input/teleop", 1);
@@ -87,7 +89,9 @@ int main(int argc, char **argv)
 		// Change 100 value to change side length
 		if (loopCount % 100 == 0)
 		{
+			ROS_INFO("starting turning\n");
 			initial_yaw = current_yaw;
+			target_yaw = current_yaw + M_PI/2.0;
 			isTurning = true;
 		}
 	}
@@ -102,6 +106,7 @@ int main(int argc, char **argv)
 		{
 			if ((2 * M_PI + current_yaw - initial_yaw) > (M_PI/2.0))
 			{
+				ROS_INFO("done turning\n");
 				isTurning = false;
 			}
 		}
@@ -109,6 +114,7 @@ int main(int argc, char **argv)
 		{
 			if (std::abs(initial_yaw - current_yaw) > (M_PI/2.0))
 			{
+				ROS_INFO("done turning\n");
 				isTurning = false;
 			}
 		}
