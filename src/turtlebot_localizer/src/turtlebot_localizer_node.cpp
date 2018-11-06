@@ -19,6 +19,12 @@
 #include <cmath>
 #include <Eigen/Dense>
 #include <vector>
+#include <string>
+
+#define SIMULATION
+
+static std::random_device rd; // obtain a random number from hardware
+static std::mt19937 kENG(rd()); // seed the generator
 
 struct Vector
 {
@@ -32,7 +38,7 @@ struct Vector
 std::ostream& operator << (std::ostream &o, const Vector &a)
 {
     o << "x: " << a.x << "\ty: " << a.y <<  "\ttheta: " << a.theta;
-    o << "covariance: " << std::endl << a.cov;
+    o << "\ncovariance: " << std::endl << a.cov;
     return o;
 }
 
@@ -92,26 +98,34 @@ class MotionModel
 
         Position UpdateState(Position currentState, double timeDelta)
         {
-            // ROS_INFO("Updating state:");
-
-            Eigen::VectorXd newStateVector(3);
+            // Fix velocity
+            Eigen::Vector3d newStateVector;
             Position oldState;
             Position newState;
-            Eigen::Vector3d xPrev = StructToVector(currentState);
-            Eigen::Vector3d v = StructToVector(m_currentVelocity);
+            Eigen::Vector3d xPrev;
+            Eigen::Vector3d v;
             Eigen::Vector3d e;
+            Velocity velocity;
 
+            velocity = m_currentVelocity;
+            velocity.x = velocity.x * std::cos(currentState.theta);
+            velocity.y = velocity.y * std::sin(currentState.theta);
+            xPrev = StructToVector(currentState);
+            v = StructToVector(velocity);
 
             // Error generator
-            std::random_device rd; // obtain a random number from hardware
-            std::mt19937 eng(rd()); // seed the generator
-            std::uniform_real_distribution<> predDistr(-0.1, 0.1);
-            e(0) = predDistr(eng);
-            e(1) = predDistr(eng);
-            e(2) = predDistr(eng);
+            std::normal_distribution<> posDistr(0, 0.1);
+            std::normal_distribution<> angDistr(0, 0.17);
+            e(0) = posDistr(kENG);
+            e(1) = posDistr(kENG);
+            e(2) = angDistr(kENG);
             
+            // No error
+            // e(0) = 0.0;
+            // e(1) = 0.0;
+            // e(2) = 0.0;
 
-            newStateVector = A*xPrev + timeDelta*v;
+            newStateVector = A*xPrev + timeDelta*v + e;
             newState = VectorToStruct(newStateVector);
 
             // Handle rollover outside 0 -> 2pi range
@@ -130,16 +144,11 @@ class MotionModel
         {
             Velocity input = {0, 0, 0};
 
-            input.x = msg.linear.x * std::cos(m_currentState.theta);
-            input.y = msg.linear.x * std::sin(m_currentState.theta);
+            input.x = msg.linear.x;
+            input.y = msg.linear.x;
             input.theta = msg.angular.z;
 
             m_currentVelocity = input;
-
-            // std::cout << "state" << std::endl;
-            // std::cout << m_currentState << std::endl;
-            // std::cout << "input" << std::endl;
-            // std::cout << m_currentVelocity << std::endl;
         }
 
         Position GetCurrentState()
@@ -155,7 +164,7 @@ class MotionModel
         }
 
     private:
-        const Eigen::MatrixXd A = Eigen::MatrixXd::Identity(3, 3);
+        const Eigen::Matrix3d A = Eigen::Matrix3d::Identity();
         Position m_currentState;
         Velocity m_currentVelocity;
         visualization_msgs::MarkerArray m_markers;
@@ -169,6 +178,10 @@ class MeasurementModel
         : m_currentMeasurement({0, 0, 0})
         , m_firstMeasurement(false)
         {
+            // Initialize covariance
+            m_covSim << std::pow(0.1, 2), 0, 0,
+                        0, std::pow(0.1, 2), 0,
+                        0, 0, std::pow(0.1, 2);
         }
 
         ~MeasurementModel()
@@ -180,19 +193,42 @@ class MeasurementModel
             return m_firstMeasurement;
         }
 
-        void PoseCallback(const gazebo_msgs::ModelStates &msg)
+        void PoseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg)
+        {
+            Position measurement;
+            measurement.x = msg->pose.pose.position.x;
+            measurement.y = msg->pose.pose.position.y;
+            measurement.theta = tf::getYaw(msg->pose.pose.orientation);
+            measurement.cov(0,0) = (msg->pose.covariance)[0];
+            measurement.cov(0,1) = (msg->pose.covariance)[1];
+            measurement.cov(0,2) = (msg->pose.covariance)[5];
+            measurement.cov(1,0) = (msg->pose.covariance)[6];
+            measurement.cov(1,1) = (msg->pose.covariance)[7];
+            measurement.cov(1,2) = (msg->pose.covariance)[11];
+            measurement.cov(2,0) = (msg->pose.covariance)[30];
+            measurement.cov(2,1) = (msg->pose.covariance)[31];
+            measurement.cov(2,2) = (msg->pose.covariance)[35];
+            updateMeasurement(measurement);
+        }
+
+        void PoseCallbackSim(const gazebo_msgs::ModelStates &msg)
         {
             int i;
             for (i = 0; i < msg.name.size(); i++)
-                if (msg.name[i] == "mobile_base")
+                if (msg.name[i] == m_simMsgName)
                     break;
 
             Position measurement;
             measurement.x = msg.pose[i].position.x;
             measurement.y = msg.pose[i].position.y;
             measurement.theta = tf::getYaw(msg.pose[i].orientation);
+            measurement.cov = m_covSim;
+            updateMeasurement(measurement);
+        }
 
-            // Tranform from -pi to pi -> 0 to 2pi
+        void updateMeasurement(Position measurement)
+        {
+            // Transform from -pi to pi -> 0 to 2pi
             if(measurement.theta < 0)
             {
                 measurement.theta += M_PI * 2;
@@ -212,6 +248,8 @@ class MeasurementModel
         }
     
     private:
+        const std::string m_simMsgName = "mobile_base";
+        Eigen::Matrix3d m_covSim;
         Position m_currentMeasurement;
         bool m_firstMeasurement;
 };
@@ -234,15 +272,8 @@ class ParticleFilter
         , m_motionModel(motionModel)
         , m_nParticles(particleCount)
         {
-            // Initialize covariance
-            Q << std::pow(0.01, 2), 0, 0,
-                 0, std::pow(0.01, 2), 0,
-                 0, 0, std::pow(0.001, 2);
-
             // Initialize particles
-            std::random_device rd; // obtain a random number from hardware
-            std::mt19937 eng(rd()); // seed the generator
-            std::uniform_real_distribution<> thetaDistr(-M_PI, M_PI);
+            std::uniform_real_distribution<> thetaDistr(0, 2*M_PI);
             std::uniform_real_distribution<> xDistr(m_xMin, m_xMax); 
             std::uniform_real_distribution<> yDistr(m_yMin, m_yMax); 
 
@@ -251,7 +282,7 @@ class ParticleFilter
             // Initialize points
             m_points.header.frame_id = m_frameId;
             m_points.header.stamp = ros::Time::now();
-            m_points.ns = "points";
+            m_points.ns = m_particleType;
             m_points.action = visualization_msgs::Marker::ADD;
             m_points.pose.orientation.w = 1.0;
             m_points.id = 0;
@@ -261,11 +292,11 @@ class ParticleFilter
             m_points.color.g = 1.0f;
             m_points.color.a = 1.0;
 
-            for(std::vector<int>::size_type i = 0; i != m_particles.size(); i++)
+            for(uint32_t i = 0; i < m_nParticles; i++)
             {
-                m_particles[i].pos.x = xDistr(eng);
-                m_particles[i].pos.y = yDistr(eng);
-                m_particles[i].pos.theta = thetaDistr(eng);
+                m_particles[i].pos.x = xDistr(kENG);
+                m_particles[i].pos.y = yDistr(kENG);
+                m_particles[i].pos.theta = thetaDistr(kENG);
                 m_particles[i].weight = 1.0/m_nParticles;
 
                 // std::cout << std::setprecision(4) << m_particles[i].pos << "\tweight: " << m_particles[i].weight << std::endl;
@@ -287,43 +318,7 @@ class ParticleFilter
 
         void Resample()
         {
-            // visualization_msgs::Marker points;
 
-            // std::random_device rd; // obtain a random number from hardware
-            // std::mt19937 eng(rd()); // seed the generator
-            // std::uniform_real_distribution<> thetaDistr(-M_PI, M_PI);
-            // std::uniform_real_distribution<> xDistr(m_xMin, m_xMax); 
-            // std::uniform_real_distribution<> yDistr(m_yMin, m_yMax); 
-
-            // // Initialize points
-            // points.header.frame_id = m_frameId;
-            // points.header.stamp = ros::Time::now();
-            // points.ns = "points";
-            // points.action = visualization_msgs::Marker::ADD;
-            // points.pose.orientation.w = 1.0;
-            // points.id = 0;
-            // points.type = visualization_msgs::Marker::POINTS;
-            // points.scale.x = m_particleSize;
-            // points.scale.y = m_particleSize;
-            // points.color.g = 1.0f;
-            // points.color.a = 1.0;
-
-            // for(std::vector<int>::size_type i = 0; i != m_particles.size(); i++)
-            // {
-            //     m_particles[i].pos.x = xDistr(eng);
-            //     m_particles[i].pos.y = yDistr(eng);
-            //     m_particles[i].pos.theta = thetaDistr(eng);
-
-            //     // std::cout << std::setprecision(4) << m_particles[i].pos << "\tweight: " << m_particles[i].weight << std::endl;
-
-            //     geometry_msgs::Point p;
-            //     p.x = m_particles[i].pos.x;
-            //     p.y = m_particles[i].pos.y;
-            //     p.z = 0;
-            //     points.points.push_back(p);
-            // }
-
-            // m_points = points;
         }
 
         void PublishParticles()
@@ -336,26 +331,44 @@ class ParticleFilter
 
         Particle Run(Position measurement, Velocity input, double timeDelta)
         {   
-            std::vector <Position> particlePredictions;
+            // double wSum = 0;
+            double beta;
+            double wMax = 0;
+            uint32_t index;
+            std::vector <Particle> particlePredictions;
             particlePredictions.resize(m_nParticles);
 
             // Prediction and likelihood
-            for(std::vector<int>::size_type i = 0; i != m_particles.size(); i++)
+            for(uint32_t i = 0; i < m_nParticles; i++)
             {
-                particlePredictions[i] = m_motionModel->UpdateState(m_particles[i].pos, timeDelta);
+                particlePredictions[i].pos = m_motionModel->UpdateState(m_particles[i].pos, timeDelta);
+                particlePredictions[i].weight = Likelihood(measurement, particlePredictions[i].pos, measurement.cov);
+                // std::cout <<  particlePredictions[i].weight << std::endl;
+                wMax = wMax > particlePredictions[i].weight ? wMax : particlePredictions[i].weight;
             }
 
             // Resampling
             m_points.header.stamp = ros::Time::now();
-            for(std::vector<int>::size_type i = 0; i != m_particles.size(); i++)
+            std::uniform_int_distribution<> indexDistr(0, m_nParticles-1);
+            std::uniform_real_distribution<> wDistr(0, 2*wMax);
+            index = indexDistr(kENG);
+            for(uint32_t i = 0; i < m_nParticles; i++)
             {
                 // std::cout << std::setprecision(4) << m_particles[i].pos << "\tweight: " << m_particles[i].weight << std::endl;
+                beta += wDistr(kENG);
+                while (beta > particlePredictions[index].weight)
+                {
+                    beta -= particlePredictions[index].weight;
+                    index = (index+1)%m_nParticles;
+                }
 
+                m_particles[i] = particlePredictions[index];
                 geometry_msgs::Point p;
-                p.x = particlePredictions[i].x;
-                p.y = particlePredictions[i].y;
+                p.x = m_particles[i].pos.x;
+                p.y = m_particles[i].pos.y;
                 p.z = 0;
                 m_points.points[i] = p;
+
             }
 
             // Publish
@@ -368,7 +381,7 @@ class ParticleFilter
             Eigen::Vector3d mu = StructToVector(prediction);
             Eigen::Vector3d y = StructToVector(measurement);
             Eigen::Vector3d b = y - mu;
-            double likelihood = exp(-0.5*(std::log(Q.determinant())+(b).transpose()*cov.inverse()*(b) + k*std::log(2*M_PI)));
+            double likelihood = exp(-0.5*(std::log(cov.determinant())+(b).transpose()*cov.inverse()*(b) + k*std::log(2*M_PI)));
 
             // std::cout << cov << std::endl;
             // std::cout << mu << std::endl;
@@ -378,7 +391,7 @@ class ParticleFilter
             return likelihood;
         }
     private:
-        Eigen::Matrix3d Q;
+        const std::string m_particleType = "points";
         static constexpr uint32_t k = 3; // array dimension
         static constexpr double m_particleSize = 0.1;
         ros::Publisher *m_particlesPublisher;
@@ -396,6 +409,9 @@ class ParticleFilter
 
 int main(int argc, char **argv)
 {
+    // Static variables
+    static std::string particleFrame = "/map";
+
     //Initialize the ROS framework
     ros::init(argc,argv,"main_control");
     ros::NodeHandle n;
@@ -403,10 +419,14 @@ int main(int argc, char **argv)
     Position initialState;
     MotionModel motionModel;
     MeasurementModel measurementModel;
-    ParticleFilter filter("/map", 100, -4, 4, -4, 4, &motionModel);
+    ParticleFilter filter("/map", 1000, -10, 10, -10, 10, &motionModel);
 
     //Subscribe to the desired topics and assign callbacks
-    ros::Subscriber poseSub = n.subscribe("/gazebo/model_states", 1, &MeasurementModel::PoseCallback, &measurementModel);
+#ifdef SIMULATION
+    ros::Subscriber poseSub = n.subscribe("/gazebo/model_states", 1, &MeasurementModel::PoseCallbackSim, &measurementModel);
+#else
+    ros::Subscriber poseSub = n.subscribe("/indoor_pos", 1, &MeasurementModel::PoseCallback, &measurementModel);
+#endif
     ros::Subscriber velocitySub = n.subscribe("/cmd_vel_mux/input/teleop", 1, &MotionModel::VelocityCallback, &motionModel);
     ros::Publisher particlesPublisher = n.advertise<visualization_msgs::Marker>("visualization_marker", 1, true);
     
@@ -433,8 +453,7 @@ int main(int argc, char **argv)
         
         // motionModel.UpdateStateInternal(0.05);
         input = motionModel.GetInput();
-        run = std::fabs(input.x) > 0.005 || std::fabs(input.y) > 0.005;
-        std::cout << run << std::endl;
+        run = std::fabs(input.x) > 0.005 || std::fabs(input.y) > 0.005 || std::fabs(input.theta) > 0.005;
 
         // Only run if robot is moving
         if (run) filter.Run(measurementModel.GetMeasurement(), input, 0.05);
