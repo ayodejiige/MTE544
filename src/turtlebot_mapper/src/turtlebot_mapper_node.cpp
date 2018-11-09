@@ -1,8 +1,11 @@
 #include <ros/ros.h>
 #include <tf/transform_datatypes.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <gazebo_msgs/ModelStates.h>
 #include <sensor_msgs/LaserScan.h>
 #include <nav_msgs/OccupancyGrid.h>
+
+// #define LIVE
 
 #define INITIAL_ODDS 0.5
 #define EMPTY_ODDS 0.4
@@ -119,6 +122,22 @@ class Mapper
         m_isPoseSet = true;
     }
 
+    //Callback function for the Position topic (SIMULATION)
+    void live_pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) 
+    {
+      m_xPos = msg->pose.pose.position.x;
+      m_yPos = msg->pose.pose.position.y;
+      m_theta = tf::getYaw(msg->pose.pose.orientation);
+
+      if(m_theta < 0)
+      {
+          m_theta += M_PI * 2;
+      }
+
+      if (!m_isPoseSet)
+        m_isPoseSet = true;
+    }
+
     //Callback function for the map
     void scan_callback(const sensor_msgs::LaserScan &msg) 
     {
@@ -145,6 +164,7 @@ class Mapper
     void inverseBresenhamScanner(int x_0, int y_0, int measurementIndex)
     {
       if (std::isnan(m_currentReading.ranges[measurementIndex])) return;
+      
       std::vector<int> x_line;
       std::vector<int> y_line;
 
@@ -271,7 +291,13 @@ int main(int argc, char **argv)
   int height = mapper.getHeight();
 
   // Set up ROS publish and subscribe
-  ros::Subscriber pose_sub = n.subscribe("/gazebo/model_states", 1, &Mapper::pose_callback, &mapper);
+  ros::Subscriber pose_sub;
+  #ifdef LIVE
+  pose_sub = n.subscribe("/gazebo/model_states", 1, &Mapper::pose_callback, &mapper);
+  #else
+  pose_sub = n.subscribe("/indoor_pos", 1, &Mapper::live_pose_callback, &mapper);
+  #endif
+
   ros::Subscriber scan_sub = n.subscribe("/scan", 1, &Mapper::scan_callback, &mapper);
   ros::Publisher map_pub = n.advertise<nav_msgs::OccupancyGrid>("/map", 1, true);
 
