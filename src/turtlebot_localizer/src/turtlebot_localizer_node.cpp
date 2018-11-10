@@ -24,7 +24,7 @@
 #include <vector>
 #include <string>
 
-#define SIMULATION
+// #define SIMULATION
 
 static std::random_device rd; // Obtain a random number from hardware
 static std::mt19937 kENG(rd()); // seed the generator
@@ -75,6 +75,7 @@ class MotionModel
     public:
         MotionModel()
         : m_initialStateSet(false)
+        , m_newInput(false)
         {
         }
 
@@ -137,6 +138,11 @@ class MotionModel
             return newState;
         }
 
+        void JoystickCallback(const geometry_msgs::Twist::ConstPtr& msg)
+        {
+            m_newInput = true;
+        }
+
         void VelocityCallback(const nav_msgs::Odometry::ConstPtr& msg)
         {
             Velocity input = {0, 0, 0};
@@ -160,12 +166,21 @@ class MotionModel
             return m_currentVelocity;
         }
 
+        bool NewInput()
+        {
+            bool ans = m_newInput;
+            m_newInput = false;
+
+            return ans;
+        }
+
     private:
         const Eigen::Matrix3d A = Eigen::Matrix3d::Identity();
         Position m_currentState;
         Velocity m_currentVelocity;
         visualization_msgs::MarkerArray m_markers;
         bool m_initialStateSet;
+        bool m_newInput;
 };
 
 class MeasurementModel
@@ -177,9 +192,9 @@ class MeasurementModel
         , m_frameId(frameId)
         {
             // Initialize covariance
-            m_covSim << std::pow(1, 2), 0, 0,
-                        0, std::pow(1, 2), 0,
-                        0, 0, std::pow(0.1, 2);
+            m_covSim << std::pow(0.1, 2), 0, 0,
+                        0, std::pow(0.1, 2), 0,
+                        0, 0, 0.02;
 
             m_Marker.header.frame_id = m_frameId;
             m_Marker.header.stamp = ros::Time();
@@ -207,15 +222,17 @@ class MeasurementModel
             measurement.x = msg->pose.pose.position.x;
             measurement.y = msg->pose.pose.position.y;
             measurement.theta = tf::getYaw(msg->pose.pose.orientation);
-            measurement.cov(0,0) = (msg->pose.covariance)[0];
-            measurement.cov(0,1) = (msg->pose.covariance)[1];
-            measurement.cov(0,2) = (msg->pose.covariance)[5];
-            measurement.cov(1,0) = (msg->pose.covariance)[6];
-            measurement.cov(1,1) = (msg->pose.covariance)[7];
-            measurement.cov(1,2) = (msg->pose.covariance)[11];
-            measurement.cov(2,0) = (msg->pose.covariance)[30];
-            measurement.cov(2,1) = (msg->pose.covariance)[31];
-            measurement.cov(2,2) = (msg->pose.covariance)[35];
+            measurement.cov = m_covSim;
+            // measurement.cov(0,0) = (msg->pose.covariance)[0];
+            // measurement.cov(0,1) = (msg->pose.covariance)[1];
+            // measurement.cov(0,2) = (msg->pose.covariance)[5];
+            // measurement.cov(1,0) = (msg->pose.covariance)[6];
+            // measurement.cov(1,1) = (msg->pose.covariance)[7];
+            // measurement.cov(1,2) = (msg->pose.covariance)[11];
+            // measurement.cov(2,0) = (msg->pose.covariance)[30];
+            // measurement.cov(2,1) = (msg->pose.covariance)[31];
+            // measurement.cov(2,2) = (msg->pose.covariance)[35];
+            // std::cout << measurement.cov << std::endl;
             UpdateMeasurement(measurement);
         }
 
@@ -453,9 +470,9 @@ class ParticleFilter
             m_estimateMarker.pose.orientation.y = q.getY();
             m_estimateMarker.pose.orientation.z = q.getZ();
 
-            // std::cout << "------------------------------------------------------------------" << std::endl;
-            // std::cout << "E" << m_posEstimate << std::endl;
-            // std::cout << "M" << measurement << std::endl;
+            std::cout << "------------------------------------------------------------------" << std::endl;
+            std::cout << "E" << m_posEstimate << std::endl;
+            std::cout << "M" << measurement << std::endl;
         
             // Publish
             Publish();
@@ -522,7 +539,7 @@ int main(int argc, char **argv)
 {
     // Static variables
     std::string frame = "/odom";
-    uint32_t nParticles = 1000;
+    uint32_t nParticles = 2000;
     double xMin = -4;
     double xMax = 4;
     double yMin = -4;
@@ -544,6 +561,7 @@ int main(int argc, char **argv)
 #else
     ros::Subscriber poseSub = n.subscribe("/indoor_pos", 1, &MeasurementModel::PoseCallback, &measurementModel);
 #endif
+    ros::Subscriber joystickSub = n.subscribe("/cmd_vel_mux/input/teleop", 1, &MotionModel::JoystickCallback, &motionModel);
     ros::Subscriber velocitySub = n.subscribe("/odom", 1, &MotionModel::VelocityCallback, &motionModel);
     ros::Publisher particlesPublisher = n.advertise<geometry_msgs::PoseArray>("/particles", 1, true);
     ros::Publisher measurementPublisher = n.advertise<visualization_msgs::Marker>( "/robotMeasurement", 0 );
@@ -581,8 +599,8 @@ int main(int argc, char **argv)
             end = ros::Time::now().toSec();
             timeDelta = end-begin;
             begin = end;
-            ROS_INFO("Running %.5f", timeDelta);
-            filter.Run(measurement, input, 1);
+            // ROS_INFO("Running %.5f", timeDelta);
+            filter.Run(measurement, input, timeDelta);
         }
 
         loop_rate.sleep(); //Maintain the loop rate

@@ -1,17 +1,20 @@
 #include <ros/ros.h>
 #include <tf/transform_datatypes.h>
+#include <tf2/LinearMath/Quaternion.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <gazebo_msgs/ModelStates.h>
 #include <sensor_msgs/LaserScan.h>
 #include <nav_msgs/OccupancyGrid.h>
 
-// #define LIVE
+#define LIVE
 
 #define INITIAL_ODDS 0.5
-#define EMPTY_ODDS 0.4
-#define OCCUPIED_ODDS 0.6
+#define EMPTY_ODDS 0.45
+#define OCCUPIED_ODDS 0.8
 #define OCCUPANCY_ODDS_SCALE 100
 
+geometry_msgs::PoseStamped posMsg;
 short sgn(int x) { return x >= 0 ? 1 : -1; }
 
 //Bresenham line algorithm (pass empty vectors)
@@ -125,9 +128,11 @@ class Mapper
     //Callback function for the Position topic (SIMULATION)
     void live_pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) 
     {
+      tf2::Quaternion q;
       m_xPos = msg->pose.pose.position.x;
       m_yPos = msg->pose.pose.position.y;
       m_theta = tf::getYaw(msg->pose.pose.orientation);
+      ROS_INFO("x=%f y=%f theta=%f", m_xPos, m_yPos, m_theta);
 
       if(m_theta < 0)
       {
@@ -136,6 +141,16 @@ class Mapper
 
       if (!m_isPoseSet)
         m_isPoseSet = true;
+      
+      q.setRPY(0, 0, m_theta);
+
+      posMsg.pose.position.x = m_xPos;
+      posMsg.pose.position.y = m_yPos;
+      posMsg.pose.position.z = 0;
+      posMsg.pose.orientation.w = q.getW();
+      posMsg.pose.orientation.x = q.getX();
+      posMsg.pose.orientation.y = q.getY();
+      posMsg.pose.orientation.z = q.getZ();
     }
 
     //Callback function for the map
@@ -155,41 +170,29 @@ class Mapper
     void getCurrentMapCoordinates(int &x_0, int &y_0)
     {
       x_0 = (int) ((m_xPos - m_xMin) / m_xRes);
-      x_0 = std::max(1, std::min(x_0, m_xNum));
+      x_0 = std::max(0, std::min(x_0, m_xNum - 1));
 
       y_0 = (int) ((m_yPos - m_yMin) / m_yRes);
-      y_0 = std::max(1, std::min(y_0, m_yNum));
+      y_0 = std::max(0, std::min(y_0, m_yNum - 1));
     }
 
     void inverseBresenhamScanner(int x_0, int y_0, int measurementIndex)
     {
       if (std::isnan(m_currentReading.ranges[measurementIndex])) return;
-      
+      if (m_currentReading.ranges[measurementIndex] > 2) return;
+      if (m_currentReading.ranges[measurementIndex] < m_currentReading.minRange) return;
+
       std::vector<int> x_line;
       std::vector<int> y_line;
 
-      float bearing_angle = m_currentReading.minAngle + m_currentReading.angleResolution * measurementIndex + m_theta;
-      /*
-      if (measurementIndex == 1)
-        ROS_INFO("range= %f bearing_angle= %f\n", m_currentReading.ranges[measurementIndex], bearing_angle);
-      */
+      float bearing_angle = m_currentReading.minAngle + m_currentReading.angleResolution * measurementIndex + m_theta;      
 
-      int x_1 = (int) ((m_xPos + m_currentReading.ranges[measurementIndex] * cos(bearing_angle) - m_xMin) / m_xRes);
-      /*
-      if (measurementIndex == 1)
-        ROS_INFO("X pos = %f X_1= %d\n", m_xPos, x_1);
-      */
+      int x_1 = x_0 + (int) ((m_currentReading.ranges[measurementIndex] * cos(bearing_angle)) / m_xRes);
+      x_1 = std::max(0, std::min(x_1, m_xNum - 1));
 
-      x_1 = std::max(1, std::min(x_1, m_xNum));
-
-      int y_1 = (int) ((m_yPos + m_currentReading.ranges[measurementIndex] * sin(bearing_angle) - m_yMin) / m_yRes);
-      y_1 = std::max(1, std::min(y_1, m_yNum));
+      int y_1 = y_0 + (int) ((m_currentReading.ranges[measurementIndex] * sin(bearing_angle)) / m_yRes);
+      y_1 = std::max(0, std::min(y_1, m_yNum - 1));
       
-      /*
-      if (measurementIndex == 1)
-        ROS_INFO("Y pos = %f Y_1= %d\n", m_yPos, y_1);
-      */
-
       bresenham(x_0, y_0, x_1, y_1, x_line, y_line);
 
       int line_size = x_line.size();
@@ -199,15 +202,18 @@ class Mapper
         log_odds_update.push_back(log(EMPTY_ODDS / (1 - EMPTY_ODDS)));
       }
 
-      if (m_currentReading.ranges[measurementIndex] < m_currentReading.maxRange)
-      {
-        log_odds_update[line_size - 1] = log(OCCUPIED_ODDS / (1 - OCCUPIED_ODDS));
-      }
+      //if (abs(m_currentReading.ranges[measurementIndex] - m_currentReading.maxRange) )
+      //{
+      log_odds_update[line_size - 1] = log(OCCUPIED_ODDS / (1 - OCCUPIED_ODDS));
+      //}
 
       for (int line_it = 0; line_it < line_size; line_it++)
       {
         int index = (x_line[line_it] * m_xNum + y_line[line_it]);
+
         m_logOddsMap[index] = m_logOddsMap[index] + log_odds_update[line_it] - m_initialLogOdds;
+        m_map[index] = (int) (exp(m_logOddsMap[index]) / (1 + exp(m_logOddsMap[index])) * OCCUPANCY_ODDS_SCALE);
+
       }
     }
 
@@ -285,7 +291,9 @@ int main(int argc, char **argv)
   ros::NodeHandle n;
 
   // Initialize map class
-  Mapper mapper(-15, 15, -15, 15, 300, 300); 
+  float xMin = -3;
+  float yMin = -5;
+  Mapper mapper(xMin, 7, yMin, 5, 150, 150); 
   float resolution = mapper.getResolution();
   int width = mapper.getWidth();
   int height = mapper.getHeight();
@@ -293,13 +301,18 @@ int main(int argc, char **argv)
   // Set up ROS publish and subscribe
   ros::Subscriber pose_sub;
   #ifdef LIVE
-  pose_sub = n.subscribe("/gazebo/model_states", 1, &Mapper::pose_callback, &mapper);
-  #else
   pose_sub = n.subscribe("/indoor_pos", 1, &Mapper::live_pose_callback, &mapper);
+  #else
+  pose_sub = n.subscribe("/gazebo/model_states", 1, &Mapper::pose_callback, &mapper);
   #endif
 
   ros::Subscriber scan_sub = n.subscribe("/scan", 1, &Mapper::scan_callback, &mapper);
   ros::Publisher map_pub = n.advertise<nav_msgs::OccupancyGrid>("/map", 1, true);
+  ros::Publisher pose_pub = n.advertise<geometry_msgs::PoseStamped>( "/robotPose", 0 );
+
+  // pos msg params
+  posMsg.header.frame_id = "/map";
+  posMsg.header.stamp = ros::Time::now();
 
   // Set OccupancyGrid msg parameters
   nav_msgs::OccupancyGrid map_msg;
@@ -309,14 +322,11 @@ int main(int argc, char **argv)
   map_msg.info.height = height;
 
   geometry_msgs::Point position;
-  position.x = (float)(-1 * resolution * width / 2); 
-  position.y = (float)(-1 * resolution * height / 2);
+  position.x = (float)(xMin); 
 
+  position.y = (float)(yMin);
   geometry_msgs::Quaternion orientation;
-  orientation.w = 0.0;
-  orientation.x = 0.0;
-  orientation.y = 0.0;
-  orientation.z = 0.0;
+  orientation = tf::createQuaternionMsgFromYaw(M_PI / 2);
 
   geometry_msgs::Pose origin;
   origin.position = position;
@@ -332,10 +342,10 @@ int main(int argc, char **argv)
 
   while (ros::ok())
   {
-    ROS_INFO("Mapper running\n");
+    ros::spinOnce();
+  
     int x_0, y_0;
     mapper.getCurrentMapCoordinates(x_0, y_0);
-    ROS_INFO("X0: %d Y0: %d\n", x_0, y_0);
 
   	// iterate over all laser scans
   	for (int scan_it = 0; scan_it < mapper.getNumRangeReadings(); scan_it++)
@@ -344,14 +354,13 @@ int main(int argc, char **argv)
   	}
 
     // extract real odds
-    mapper.updateProbabilities();
+    //mapper.updateProbabilities();
 
-  	// publish map
+  	// // publish map
     map_msg.data = mapper.getMap();
     map_pub.publish(map_msg);
-
-    ros::spinOnce();
-
+    pose_pub.publish(posMsg);
+    
     loop_rate.sleep();
   }
 
