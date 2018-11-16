@@ -7,11 +7,14 @@
 #include <sensor_msgs/LaserScan.h>
 #include <nav_msgs/OccupancyGrid.h>
 
+#include <dynamic_reconfigure/server.h>
+#include <turtlebot_mapper/turtlebot_mapper_nodeConfig.h>
+
 #define LIVE
 
 #define INITIAL_ODDS 0.5
-#define EMPTY_ODDS 0.45
-#define OCCUPIED_ODDS 0.8
+#define EMPTY_ODDS 0.2
+#define OCCUPIED_ODDS 0.85
 #define OCCUPANCY_ODDS_SCALE 100
 
 geometry_msgs::PoseStamped posMsg;
@@ -86,6 +89,9 @@ class Mapper
     , m_yNum(yNum)
     , m_isPoseSet(false)
     , m_isScanSet(false)
+    , m_emptyOdds(0.4)
+    , m_occupiedOdds(0.8)
+    , m_maxRange(2)
     {
       m_mapSize = m_xNum * m_yNum;
       m_xRes = (m_xMax - m_xMin) / (float) m_xNum;
@@ -129,10 +135,14 @@ class Mapper
     void live_pose_callback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr& msg) 
     {
       tf2::Quaternion q;
+      q.setRPY(0, 0, tf::getYaw(msg->pose.pose.orientation));
+
+      if (abs(q.getW()) > 1 || abs(q.getX()) > 1 || abs(q.getY()) > 1 || abs(q.getZ()) > 1) return;
+
       m_xPos = msg->pose.pose.position.x;
       m_yPos = msg->pose.pose.position.y;
       m_theta = tf::getYaw(msg->pose.pose.orientation);
-      ROS_INFO("x=%f y=%f theta=%f", m_xPos, m_yPos, m_theta);
+      // ROS_INFO("x=%f y=%f theta=%f", m_xPos, m_yPos, m_theta);
 
       if(m_theta < 0)
       {
@@ -167,6 +177,15 @@ class Mapper
         m_isScanSet = true;
     }
 
+    void config_callback(turtlebot_mapper::turtlebot_mapper_nodeConfig &config, uint32_t level)
+    {
+      m_emptyOdds = config.empty_odds;
+      m_occupiedOdds = config.occupied_odds;
+      m_maxRange = config.max_range;
+
+      // ROS_INFO("%.3f %.3f %.3f", m_emptyOdds, m_occupiedOdds, m_maxRange);
+    }
+
     void getCurrentMapCoordinates(int &x_0, int &y_0)
     {
       x_0 = (int) ((m_xPos - m_xMin) / m_xRes);
@@ -179,7 +198,7 @@ class Mapper
     void inverseBresenhamScanner(int x_0, int y_0, int measurementIndex)
     {
       if (std::isnan(m_currentReading.ranges[measurementIndex])) return;
-      if (m_currentReading.ranges[measurementIndex] > 2) return;
+      if (m_currentReading.ranges[measurementIndex] > m_maxRange) return;
       if (m_currentReading.ranges[measurementIndex] < m_currentReading.minRange) return;
 
       std::vector<int> x_line;
@@ -199,17 +218,19 @@ class Mapper
       std::vector<float> log_odds_update;
       for (int line_it = 0; line_it < line_size; line_it++)
       {
-        log_odds_update.push_back(log(EMPTY_ODDS / (1 - EMPTY_ODDS)));
+        log_odds_update.push_back(log(m_emptyOdds / (1 - m_emptyOdds)));
       }
 
       //if (abs(m_currentReading.ranges[measurementIndex] - m_currentReading.maxRange) )
       //{
-      log_odds_update[line_size - 1] = log(OCCUPIED_ODDS / (1 - OCCUPIED_ODDS));
+      log_odds_update[line_size - 1] = log(m_occupiedOdds / (1 - m_occupiedOdds));
       //}
 
       for (int line_it = 0; line_it < line_size; line_it++)
       {
-        int index = (x_line[line_it] * m_xNum + y_line[line_it]);
+        // std::cout << x_0 << " " << y_0 << std::endl;
+        //int index = (x_line[line_it] * m_xNum + y_line[line_it]);
+        int index = (y_line[line_it] * m_yNum + x_line[line_it]);
 
         m_logOddsMap[index] = m_logOddsMap[index] + log_odds_update[line_it] - m_initialLogOdds;
         m_map[index] = (int) (exp(m_logOddsMap[index]) / (1 + exp(m_logOddsMap[index])) * OCCUPANCY_ODDS_SCALE);
@@ -279,6 +300,9 @@ class Mapper
     std::vector<int8_t> m_map;
     std::vector<float> m_logOddsMap;
     float m_initialLogOdds; // ASSUMES ALL INITIAL LOG ODDS ARE THE SAME ACROSS THE MAP
+    float m_emptyOdds;
+    float m_occupiedOdds;
+    float m_maxRange;
 
     // Current Scan measurement
     RangeReading m_currentReading;
@@ -293,7 +317,7 @@ int main(int argc, char **argv)
   // Initialize map class
   float xMin = -3;
   float yMin = -5;
-  Mapper mapper(xMin, 7, yMin, 5, 150, 150); 
+  Mapper mapper(xMin, 7, yMin, 5, 800, 800); 
   float resolution = mapper.getResolution();
   int width = mapper.getWidth();
   int height = mapper.getHeight();
@@ -310,6 +334,12 @@ int main(int argc, char **argv)
   ros::Publisher map_pub = n.advertise<nav_msgs::OccupancyGrid>("/map", 1, true);
   ros::Publisher pose_pub = n.advertise<geometry_msgs::PoseStamped>( "/robotPose", 0 );
 
+  dynamic_reconfigure::Server<turtlebot_mapper::turtlebot_mapper_nodeConfig> server;
+  dynamic_reconfigure::Server<turtlebot_mapper::turtlebot_mapper_nodeConfig>::CallbackType f;
+
+  f = boost::bind(&Mapper::config_callback, &mapper, _1, _2);
+  server.setCallback(f);
+
   // pos msg params
   posMsg.header.frame_id = "/map";
   posMsg.header.stamp = ros::Time::now();
@@ -323,10 +353,9 @@ int main(int argc, char **argv)
 
   geometry_msgs::Point position;
   position.x = (float)(xMin); 
-
   position.y = (float)(yMin);
   geometry_msgs::Quaternion orientation;
-  orientation = tf::createQuaternionMsgFromYaw(M_PI / 2);
+  orientation = tf::createQuaternionMsgFromYaw(0);
 
   geometry_msgs::Pose origin;
   origin.position = position;
@@ -334,7 +363,7 @@ int main(int argc, char **argv)
   
   map_msg.info.origin = origin;
 
-  ros::Rate loop_rate(10);
+  ros::Rate loop_rate(30);
 
   ROS_INFO("Waiting for mapper ready\n");
   while(mapper.isReady());
@@ -346,7 +375,7 @@ int main(int argc, char **argv)
   
     int x_0, y_0;
     mapper.getCurrentMapCoordinates(x_0, y_0);
-
+  
   	// iterate over all laser scans
   	for (int scan_it = 0; scan_it < mapper.getNumRangeReadings(); scan_it++)
   	{

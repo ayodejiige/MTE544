@@ -1,11 +1,6 @@
 //  ///////////////////////////////////////////////////////////
 //
-// turtlebot_example.cpp
-// This file contains example code for use with ME 597 lab 1
-// It outlines the basic setup of a ros node and the various 
-// inputs and outputs.
-// 
-// Author: James Servos 
+// turtlebot_localizer_node.cpp
 //
 // //////////////////////////////////////////////////////////
 
@@ -202,13 +197,27 @@ class MeasurementModel
             m_Marker.id = 0;
             m_Marker.type = visualization_msgs::Marker::SPHERE;
             m_Marker.action = visualization_msgs::Marker::ADD;
-            m_Marker.scale.x = 0.8;
-            m_Marker.scale.y = 0.5;
-            m_Marker.scale.z = 0.5;
+            m_Marker.scale.x = 0.5;
+            m_Marker.scale.y = 0.3;
+            m_Marker.scale.z = 0.1;
             m_Marker.color.a = 1.0;
             m_Marker.color.r = 0.0;
             m_Marker.color.g = 1.0;
             m_Marker.color.b = 0.0;
+
+            // Initialize path marker
+            m_pathMarker.header.frame_id = m_frameId;
+            m_pathMarker.header.stamp = ros::Time();
+            m_pathMarker.ns = "robot_path";
+            m_pathMarker.id = 2;
+            m_pathMarker.type = visualization_msgs::Marker::LINE_STRIP;
+            m_pathMarker.action = visualization_msgs::Marker::ADD;
+            m_pathMarker.scale.x = 0.03;
+            m_pathMarker.scale.y = 0.0;
+            m_pathMarker.color.a = 1.0;
+            m_pathMarker.color.r = 0.0;
+            m_pathMarker.color.g = 0.2;
+            m_pathMarker.color.b = 1.0;
             
         }
 
@@ -223,16 +232,6 @@ class MeasurementModel
             measurement.y = msg->pose.pose.position.y;
             measurement.theta = tf::getYaw(msg->pose.pose.orientation);
             measurement.cov = m_covSim;
-            // measurement.cov(0,0) = (msg->pose.covariance)[0];
-            // measurement.cov(0,1) = (msg->pose.covariance)[1];
-            // measurement.cov(0,2) = (msg->pose.covariance)[5];
-            // measurement.cov(1,0) = (msg->pose.covariance)[6];
-            // measurement.cov(1,1) = (msg->pose.covariance)[7];
-            // measurement.cov(1,2) = (msg->pose.covariance)[11];
-            // measurement.cov(2,0) = (msg->pose.covariance)[30];
-            // measurement.cov(2,1) = (msg->pose.covariance)[31];
-            // measurement.cov(2,2) = (msg->pose.covariance)[35];
-            // std::cout << measurement.cov << std::endl;
             UpdateMeasurement(measurement);
         }
 
@@ -269,16 +268,19 @@ class MeasurementModel
             return m_currentMeasurement;
         }
 
-        void SetPublisher(const ros::Publisher *publisher)
+        void SetPublisher(const ros::Publisher *publisher, const ros::Publisher *pathPublisher)
         {
             m_publisher = publisher;
+            m_pathPublisher = pathPublisher;
         }
     
     private:
         const ros::Publisher *m_publisher;
+        const ros::Publisher *m_pathPublisher;
         const std::string m_simMsgName = "mobile_base";
         Eigen::Matrix3d m_covSim;
         Position m_currentMeasurement;
+        visualization_msgs::Marker m_pathMarker;
         visualization_msgs::Marker m_Marker;
         std::string m_frameId;
 
@@ -294,9 +296,20 @@ class MeasurementModel
             m_Marker.pose.orientation.x = q.getX();
             m_Marker.pose.orientation.y = q.getY();
             m_Marker.pose.orientation.z = q.getZ();
+
+
+            geometry_msgs::Point p;
+            p.x = m_currentMeasurement.x;
+            p.y = m_currentMeasurement.y;
+            p.z = 0;
+            m_pathMarker.points.push_back(p);
             if(m_publisher)
             {
                 m_publisher->publish(m_Marker);
+            }
+            if(m_pathPublisher)
+            {
+                m_pathPublisher->publish(m_pathMarker);
             }
         }
 };
@@ -349,13 +362,27 @@ class ParticleFilter
             m_estimateMarker.id = 0;
             m_estimateMarker.type = visualization_msgs::Marker::SPHERE;
             m_estimateMarker.action = visualization_msgs::Marker::ADD;
-            m_estimateMarker.scale.x = 1.0;
-            m_estimateMarker.scale.y = 0.3;
-            m_estimateMarker.scale.z = 0.5;
+            m_estimateMarker.scale.x = 0.8;
+            m_estimateMarker.scale.y = 0.2;
+            m_estimateMarker.scale.z = 0.1;
             m_estimateMarker.color.a = 1.0;
             m_estimateMarker.color.r = 1.0;
             m_estimateMarker.color.g = 0.0;
             m_estimateMarker.color.b = 0.3;
+            
+            // Initialize path marker
+            m_pathMarker.header.frame_id = m_frameId;
+            m_pathMarker.header.stamp = ros::Time();
+            m_pathMarker.ns = "robot_estimate";
+            m_pathMarker.id = 1;
+            m_pathMarker.type = visualization_msgs::Marker::LINE_STRIP;
+            m_pathMarker.action = visualization_msgs::Marker::ADD;
+            m_pathMarker.scale.x = 0.03;
+            m_pathMarker.scale.y = 0.0;
+            m_pathMarker.color.a = 1.0;
+            m_pathMarker.color.r = 1.0;
+            m_pathMarker.color.g = 0.6;
+            m_pathMarker.color.b = 0.1;
 
             for(uint32_t i = 0; i < m_nParticles; i++)
             {
@@ -390,10 +417,11 @@ class ParticleFilter
         }
         ~ParticleFilter(){}
 
-        void SetPublishers(ros::Publisher *particlesPublisher, ros::Publisher *estimatePublisher)
+        void SetPublishers(ros::Publisher *particlesPublisher, ros::Publisher *estimatePublisher, ros::Publisher *pathPublisher)
         {
             m_particlesPublisher = particlesPublisher;
             m_estimatePublisher = estimatePublisher;
+            m_pathPublisher = pathPublisher;
         }
 
         Particle Run(const Position& measurement, 
@@ -404,7 +432,7 @@ class ParticleFilter
             double xSum = 0;
             double ySum = 0;
             double thetaSum = 0;
-            double beta;
+            double beta = 0;
             double wMax = 0;
             uint32_t index;
             std::vector <Particle> particlePredictions;
@@ -460,19 +488,26 @@ class ParticleFilter
                 ySum/m_nParticles,
                 m_particles[m_nParticles/2].pos.theta // median theta
             };
+            q.setRPY(0, 0, m_posEstimate.theta);
+
             m_estimateMarker.header.stamp = ros::Time();
             m_estimateMarker.pose.position.x = m_posEstimate.x;
             m_estimateMarker.pose.position.y = m_posEstimate.y;
             m_estimateMarker.pose.position.z = 0;
-            q.setRPY(0, 0, m_posEstimate.theta);
             m_estimateMarker.pose.orientation.w = q.getW();
             m_estimateMarker.pose.orientation.x = q.getX();
             m_estimateMarker.pose.orientation.y = q.getY();
             m_estimateMarker.pose.orientation.z = q.getZ();
+            
+            geometry_msgs::Point p;
+            p.x = m_posEstimate.x;
+            p.y = m_posEstimate.y;
+            p.z = 0;
+            m_pathMarker.points.push_back(p);
 
-            std::cout << "------------------------------------------------------------------" << std::endl;
-            std::cout << "E" << m_posEstimate << std::endl;
-            std::cout << "M" << measurement << std::endl;
+            // std::cout << "------------------------------------------------------------------" << std::endl;
+            // std::cout << "E" << m_posEstimate << std::endl;
+            // std::cout << "M" << measurement << std::endl;
         
             // Publish
             Publish();
@@ -487,6 +522,10 @@ class ParticleFilter
             if(m_estimatePublisher)
             {
                 m_estimatePublisher->publish(m_estimateMarker);
+            }
+            if(m_pathPublisher)
+            {
+                m_pathPublisher->publish(m_pathMarker);
             }
         }
 
@@ -508,8 +547,10 @@ class ParticleFilter
         static constexpr double m_particleSize = 0.1;
         ros::Publisher *m_particlesPublisher;
         ros::Publisher *m_estimatePublisher;
+        ros::Publisher *m_pathPublisher;
         geometry_msgs::PoseArray m_pointsMsg;
         visualization_msgs::Marker m_estimateMarker;
+        visualization_msgs::Marker m_pathMarker;
         std::vector <Particle> m_particles;
         std::string m_frameId; 
 
@@ -539,11 +580,18 @@ int main(int argc, char **argv)
 {
     // Static variables
     std::string frame = "/odom";
-    uint32_t nParticles = 2000;
-    double xMin = -4;
-    double xMax = 4;
-    double yMin = -4;
-    double yMax = 4;
+    uint32_t nParticles = 150;
+#ifdef SIMULATION
+    double xMin = -3;
+    double xMax = 3;
+    double yMin = -3;
+    double yMax = 3;
+#else
+    double xMin = -1;
+    double xMax = 5;
+    double yMin = -2;
+    double yMax = 6;
+#endif
 
     //Initialize the ROS framework
     ros::init(argc,argv,"main_control");
@@ -563,13 +611,15 @@ int main(int argc, char **argv)
 #endif
     ros::Subscriber joystickSub = n.subscribe("/cmd_vel_mux/input/teleop", 1, &MotionModel::JoystickCallback, &motionModel);
     ros::Subscriber velocitySub = n.subscribe("/odom", 1, &MotionModel::VelocityCallback, &motionModel);
-    ros::Publisher particlesPublisher = n.advertise<geometry_msgs::PoseArray>("/particles", 1, true);
-    ros::Publisher measurementPublisher = n.advertise<visualization_msgs::Marker>( "/robotMeasurement", 0 );
-    ros::Publisher estimatePublisher = n.advertise<visualization_msgs::Marker>( "/robotEstimate", 0 );
+    ros::Publisher particlesPublisher = n.advertise<geometry_msgs::PoseArray>("/particles_", 1, true);
+    ros::Publisher measurementPublisher = n.advertise<visualization_msgs::Marker>( "/robotMeasurement_", 0 );
+    ros::Publisher estimatePublisher = n.advertise<visualization_msgs::Marker>( "/robotEstimate_", 0 );
+    ros::Publisher pathPublisher = n.advertise<visualization_msgs::Marker>( "/robotPath_", 0 );
+    ros::Publisher truePathPublisher = n.advertise<visualization_msgs::Marker>( "/trueRobotPath_", 0 );
    
-    filter.SetPublishers(&particlesPublisher, &estimatePublisher);
+    filter.SetPublishers(&particlesPublisher, &estimatePublisher, &pathPublisher);
     filter.Publish();
-    measurementModel.SetPublisher(&measurementPublisher);
+    measurementModel.SetPublisher(&measurementPublisher, &truePathPublisher);
     
     // //Velocity control variable
     // geometry_msgs::Twist vel;
@@ -578,7 +628,7 @@ int main(int argc, char **argv)
     double timeDelta = 0.0;
     double end;
     double begin = ros::Time::now().toSec();
-    ros::Rate loop_rate(1);    //20Hz update rate
+    ros::Rate loop_rate(10);    //20Hz update rate
     Velocity input = {0, 0, 0};
     bool run = false;
 
