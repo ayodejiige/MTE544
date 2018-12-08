@@ -53,6 +53,7 @@ class PRM
             m_startMarker.action = visualization_msgs::Marker::ADD;
             m_startMarker.scale.x = 0.2;
             m_startMarker.scale.y = 0.2;
+            m_startMarker.scale.z = 0.02;
             m_startMarker.color.a = 1.0;
             m_startMarker.color.r = 0.5;
             m_startMarker.color.g = 1.0;
@@ -61,11 +62,12 @@ class PRM
             m_goalMarker.header.frame_id = frameId;
             m_goalMarker.header.stamp = ros::Time();
             m_goalMarker.ns = "goal";
-            m_goalMarker.id = 1;
+            m_goalMarker.id = 2;
             m_goalMarker.type = visualization_msgs::Marker::POINTS;
             m_goalMarker.action = visualization_msgs::Marker::ADD;
             m_goalMarker.scale.x = 0.2;
             m_goalMarker.scale.y = 0.2;
+            m_goalMarker.scale.z = 0.02;
             m_goalMarker.color.a = 1.0;
             m_goalMarker.color.r = 1.0;
             m_goalMarker.color.g = 0.5;
@@ -74,38 +76,38 @@ class PRM
             m_nodesMarker.header.frame_id = frameId;
             m_nodesMarker.header.stamp = ros::Time();
             m_nodesMarker.ns = "nodes";
-            m_nodesMarker.id = 1;
+            m_nodesMarker.id = 3;
             m_nodesMarker.type = visualization_msgs::Marker::POINTS;
             m_nodesMarker.action = visualization_msgs::Marker::ADD;
-            m_nodesMarker.scale.x = 0.05;
-            m_nodesMarker.scale.y = 0.05;
+            m_nodesMarker.scale.x = 0.02;
+            m_nodesMarker.scale.y = 0.02;
             m_nodesMarker.color.a = 1.0;
             m_nodesMarker.color.r = 1.0;
             m_nodesMarker.color.g = 0.0;
-            m_nodesMarker.color.b = 0.1;
+            m_nodesMarker.color.b = 0.2;
 
 
             m_edgesMarker.header.frame_id = frameId;
             m_edgesMarker.header.stamp = ros::Time();
             m_edgesMarker.ns = "edges";
-            m_edgesMarker.id = 1;
+            m_edgesMarker.id = 4;
             m_edgesMarker.type = visualization_msgs::Marker::LINE_LIST;
             m_edgesMarker.action = visualization_msgs::Marker::ADD;
             m_edgesMarker.scale.x = 0.01;
             m_edgesMarker.scale.y = 0.01;
-            m_edgesMarker.color.a = 1.0;
-            m_edgesMarker.color.r = 0.5;
+            m_edgesMarker.color.a = 0.7;
+            m_edgesMarker.color.r = 0.6;
             m_edgesMarker.color.g = 0.0;
-            m_edgesMarker.color.b = 0.2;
+            m_edgesMarker.color.b = 0.1;
 
             m_pathMarker.header.frame_id = frameId;
             m_pathMarker.header.stamp = ros::Time();
             m_pathMarker.ns = "path";
-            m_pathMarker.id = 1;
+            m_pathMarker.id = 5;
             m_pathMarker.type = visualization_msgs::Marker::LINE_LIST;
             m_pathMarker.action = visualization_msgs::Marker::ADD;
-            m_pathMarker.scale.x = 0.2;
-            m_pathMarker.scale.y = 0.2;
+            m_pathMarker.scale.x = 0.04;
+            m_pathMarker.scale.y = 0.04;
             m_pathMarker.color.a = 1.0;
             m_pathMarker.color.r = 0.0;
             m_pathMarker.color.g = 1.0;
@@ -123,10 +125,6 @@ class PRM
             for (int i = 0; i < mapSize; i++)
             {
                 m_map[i] = map[i];
-                // if(map[i] == 1)
-                // {
-                
-                // }
             }
 
             // Store metadata
@@ -139,38 +137,50 @@ class PRM
             m_yMax =  origin.y + height * resolution;
         }
         
-        void GetPath(Point start, Point goal, uint32_t nNodes, double maxDist)
+        void GetPath(Point start, std::vector<Point> goals, uint32_t nNodes, double maxDist)
         {  
+            ROS_INFO("Get path entry");
             Node node;
             geometry_msgs::Point p;
-
-            // Initialialize vector of nodes
-            m_nodes.resize(nNodes + 2);
-            m_nNodes = nNodes + 2;
+            std::vector<std::pair<uint32_t, uint32_t>> wayPoints;
 
             // Populate nodes vector start and goal
-            m_nodesMarker.points.resize(m_nNodes+2);
+            m_nodesMarker.points.resize(nNodes + goals.size() + 1);
+            m_nodes.resize(nNodes + goals.size() + 1);
             m_startMarker.points.resize(1);
             m_startMarker.header.stamp = ros::Time();
             p.x = start.x;
             p.y = start.y;
             p.z = 0;
-            m_startMarker.points.push_back(p);
+            m_startMarker.points[0] = p;
             m_nodesMarker.points[0] = p;
             node.x = start.x; 
             node.y = start.y;
             m_nodes[0] = node;
 
-            m_goalMarker.points.resize(1);
+            // Build way points
+            ROS_INFO("Building way points");
             m_goalMarker.header.stamp = ros::Time();
-            p.x = goal.x;
-            p.y = goal.y;
-            p.z = 0;
-            m_goalMarker.points.push_back(p);
-            m_nodesMarker.points[1] = p;
-            node.x = goal.x; 
-            node.y = goal.y;
-            m_nodes[1] = node;
+            m_goalMarker.points.resize(goals.size());
+            uint32_t nGoals = 0;
+            wayPoints.push_back(std::pair<uint32_t, uint32_t>(0, 1));
+            for (int i = 0; i < goals.size(); i++)
+            {
+                p.x = goals[i].x;
+                p.y = goals[i].y;
+                p.z = 0;
+                m_goalMarker.points[i] = p;
+                m_nodesMarker.points[i+1] = p;
+                node.x = p.x; 
+                node.y = p.y;
+                m_nodes[i+1] = node;
+                nGoals++;
+                if(i < goals.size() - 1)
+                {
+                    wayPoints.push_back(std::pair<uint32_t, uint32_t>(i+1, i+2));
+                }   
+            }
+            m_nWayPoints = goals.size() + 1;
 
             if(m_startPublisher)
             {
@@ -183,29 +193,33 @@ class PRM
             }
 
             // Build Graph
+            ROS_INFO("Find shortest path %d", wayPoints.size());
             BuildGraph(nNodes, 20);
 
-            std::vector<Node> path;
-            ShortestPath(0, 1, path);
-
-            if (path.size() == 0)
+            std::vector<Node> globalPath;
+            // Build path to way points
+            for(int i = 0; i < wayPoints.size(); i++)
             {
-                return;
+                std::vector<Node> localPath;
+                ShortestPath(wayPoints[i].first, wayPoints[i].second, localPath);
+                globalPath.insert(globalPath.begin(), localPath.begin(), localPath.end());
             }
 
+            ROS_INFO("Drawing points");
             m_pathMarker.header.stamp = ros::Time();
-            for(int i = 0; i < path.size()-1; i++)
+            for(int i = 0; i < globalPath.size()-1; i++)
             {
                 geometry_msgs::Point p1, p2;
-                p1.x = path[i].x;
-                p1.y = path[i].y;
+                p1.x = globalPath[i].x;
+                p1.y = globalPath[i].y;
                 p1.z = 0;
-                p2.x = path[i+1].x;
-                p2.y = path[i+1].y;
+                p2.x = globalPath[i+1].x;
+                p2.y = globalPath[i+1].y;
                 p2.z = 0;
                 m_pathMarker.points.push_back(p1);
                 m_pathMarker.points.push_back(p2);
-                ROS_INFO("Path -> %.3f, %3f", p1.x, p1.y);
+                ROS_INFO("Path 1 -> %.3f, %3f", p1.x, p1.y);
+                ROS_INFO("Path 2 -> %.3f, %3f", p2.x, p2.y);
             }
             if(m_pathPublisher)
             {
@@ -214,13 +228,13 @@ class PRM
         }
 
         void SetPublishers(ros::Publisher *startPublisher,
-                           ros::Publisher *endPublisher,
+                           ros::Publisher *goalPublisher,
                            ros::Publisher *nodesPublisher,
                            ros::Publisher *edgesPublisher,
                            ros::Publisher *pathPublisher)
         {
             m_startPublisher = startPublisher;
-            m_goalPublisher = pathPublisher;
+            m_goalPublisher = goalPublisher;
             m_nodesPublisher = nodesPublisher;
             m_edgesPublisher = edgesPublisher;
             m_pathPublisher = pathPublisher;
@@ -291,13 +305,13 @@ class PRM
 
             int x0 = (nodeA.x - m_xMin) / m_mapResolution;
             int y0  = (nodeA.y - m_yMin) / m_mapResolution;
-            // x0 = std::max(0, std::min(x0, m_mapWidth-1));
-            // y0 = std::max(0, std::min(y0, m_mapHeight-1));
+            x0 = std::max(0, std::min(x0, m_mapWidth-1));
+            y0 = std::max(0, std::min(y0, m_mapHeight-1));
 
             int x1 = (nodeB.x - m_xMin) / m_mapResolution;
             int y1 = (nodeB.y - m_yMin) / m_mapResolution;
-            // x1 = std::max(0, std::min(x1, m_mapWidth-1));
-            // y1 = std::max(0, std::min(y1, m_mapHeight-1));
+            x1 = std::max(0, std::min(x1, m_mapWidth-1));
+            y1 = std::max(0, std::min(y1, m_mapHeight-1));
 
             Bresenham(x0, y0, x1, y1, x, y);
 
@@ -327,20 +341,15 @@ class PRM
             }
             
             // Create Edges
-            if(m_edgesPublisher)
-            {
-                m_edgesPublisher->publish(m_edgesMarker);
-                ROS_INFO("Publish edge");
-            }
-            m_edgesMarker.points.resize(0);
             for (int i = 0; i < m_nodes.size(); i++)
             {
                 CreateEdges(nNeighbours, i);
             }
+
             if(m_edgesPublisher)
             {
                 m_edgesPublisher->publish(m_edgesMarker);
-                ROS_INFO("Publish edge");
+                ROS_INFO("Publish edge"); 
             }
             
         }
@@ -367,14 +376,14 @@ class PRM
                 {
                     continue;
                 }
-                m_nodes[nodesCount + 2] = newNode;
+                m_nodes[m_nWayPoints + nodesCount] = newNode;
 
                 // Points for visualize
                 geometry_msgs::Point p;
                 p.x = newNode.x;
                 p.y = newNode.y;
                 p.z = 0;
-                m_nodesMarker.points[nodesCount] = p;
+                m_nodesMarker.points[m_nWayPoints + nodesCount] = p;
                 nodesCount++;
             }
         }
@@ -386,7 +395,7 @@ class PRM
             Node destNode;
             uint32_t nFound = 0;
             // Vector of distanct from src to ecery node and correspoinding idx
-            std::vector<DistPair> distances(m_nNodes);
+            std::vector<DistPair> distances(m_nodes.size());
 
             for(int i = 0; i < m_nodes.size(); i++)
             {
@@ -415,7 +424,7 @@ class PRM
                     continue;
                 }
 
-                Edge edge = {i, distances[i].second};
+                Edge edge = {distances[i].first, distances[i].second};
                 m_nodes[srcIdx].edges.push_back(edge);
                 nFound++;
                 
@@ -442,18 +451,18 @@ class PRM
         void ShortestPath(uint32_t startIdx, uint32_t goalIdx, std::vector<Node> &path)
         {   
             std::vector<int> vertices;
-            std::vector<bool> open(m_nNodes);
-            std::vector<int> prev(m_nNodes);
-            std::vector<float> distances(m_nNodes);
-            // ROS_INFO("Init Shortest");
-            for(int i = 0; i < m_nNodes; i++)
+            std::vector<bool> open(m_nodes.size());
+            std::vector<int> prev(m_nodes.size());
+            std::vector<float> distances(m_nodes.size());
+            ROS_INFO("Init Shortest");
+            for(int i = 0; i < m_nodes.size(); i++)
             {
                 distances[i] = INFINITY;
                 prev[i] = -100;
                 open[i] = true;
             }            
 
-            // ROS_INFO("Start Shortest");
+            ROS_INFO("Start Shortest");
             distances[startIdx] = 0;
             for (int count = 0; count < open.size()-1; count++) 
             {
@@ -475,12 +484,12 @@ class PRM
                 }
                 // ROS_INFO("Worthy %d %.3f", minIdx, minDist);
                 open[minIdx] = false;
-                // vertices.erase(std::remove(vertices.begin(), vertices.end(), minIdx), vertices.end());
+
                 // If reached target
-                // if (minIdx == goalIdx)
-                // {
-                //     break;
-                // }
+                if (minIdx == goalIdx)
+                {
+                    break;
+                }
 
                 std::vector<Edge> neighbours = (m_nodes[minIdx]).edges;
                 // ROS_INFO("Number of neighbours %d", neighbours.size());
@@ -495,7 +504,6 @@ class PRM
 
                     float cost = edge.cost;
                     float dist = distances[minIdx] + cost;
-                    ROS_INFO("Worthy %.3f %.3f", cost, dist);
                     if (dist < distances[neighIdx])
                     {
                         distances[neighIdx] = dist;
@@ -515,7 +523,7 @@ class PRM
             {
                 // ROS_INFO("Push back");
                 path.push_back(m_nodes[currentIdx]);
-                ROS_INFO("Find prev %d", currentIdx);
+                ROS_INFO("Find prev %d %.3f, %.3f", currentIdx, m_nodes[currentIdx].x, m_nodes[currentIdx].y);
                 currentIdx = prev[currentIdx];
             }
             ROS_INFO("Finished Building");
@@ -525,7 +533,8 @@ class PRM
         std::vector<int8_t> m_map;
         std::vector<int8_t> m_collisonMap;
         std::vector<Node> m_nodes;
-        int m_nNodes;
+        uint32_t m_nWayPoints;
+        uint32_t m_nNodes;
         int m_mapWidth;
         int m_mapHeight;
         double m_xMin;
@@ -595,7 +604,6 @@ int main(int argc, char **argv)
     ros::Publisher edgesPublisher = n.advertise<visualization_msgs::Marker>( "/edges", 0);
     ros::Publisher pathPublisher = n.advertise<visualization_msgs::Marker>( "/path", 0);
 
-    
     planner.SetPublishers(&startPublisher, &goalPublisher, &nodesPublisher, &edgesPublisher, &pathPublisher);
 
     //Set the loop rate
@@ -608,10 +616,11 @@ int main(int argc, char **argv)
         {
             continue;
         }
-        ROS_INFO("Got map");
+
         if(!done)
         {
-            planner.GetPath({4, 0}, {8,-4}, 300, 5);
+            std::vector<Point> goals = {{4, 0}, {8,-4}, {8, 0}};
+            planner.GetPath({0, 0}, goals, 600, 5);
             done = true;
         }
         loop_rate.sleep(); //Maintain the loop rate
