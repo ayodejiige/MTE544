@@ -51,13 +51,13 @@ class PRM
             m_startMarker.id = 1;
             m_startMarker.type = visualization_msgs::Marker::POINTS;
             m_startMarker.action = visualization_msgs::Marker::ADD;
-            m_startMarker.scale.x = 0.2;
-            m_startMarker.scale.y = 0.2;
+            m_startMarker.scale.x = 0.4;
+            m_startMarker.scale.y = 0.4;
             m_startMarker.scale.z = 0.02;
             m_startMarker.color.a = 1.0;
             m_startMarker.color.r = 0.5;
             m_startMarker.color.g = 1.0;
-            m_startMarker.color.b = 0.5;
+            m_startMarker.color.b = 1.0;
 
             m_goalMarker.header.frame_id = frameId;
             m_goalMarker.header.stamp = ros::Time();
@@ -65,10 +65,10 @@ class PRM
             m_goalMarker.id = 2;
             m_goalMarker.type = visualization_msgs::Marker::POINTS;
             m_goalMarker.action = visualization_msgs::Marker::ADD;
-            m_goalMarker.scale.x = 0.2;
-            m_goalMarker.scale.y = 0.2;
+            m_goalMarker.scale.x = 0.4;
+            m_goalMarker.scale.y = 0.4;
             m_goalMarker.scale.z = 0.02;
-            m_goalMarker.color.a = 1.0;
+            m_goalMarker.color.a = 4.0;
             m_goalMarker.color.r = 1.0;
             m_goalMarker.color.g = 0.5;
             m_goalMarker.color.b = 0.5;
@@ -79,9 +79,9 @@ class PRM
             m_nodesMarker.id = 3;
             m_nodesMarker.type = visualization_msgs::Marker::POINTS;
             m_nodesMarker.action = visualization_msgs::Marker::ADD;
-            m_nodesMarker.scale.x = 0.02;
-            m_nodesMarker.scale.y = 0.02;
-            m_nodesMarker.color.a = 1.0;
+            m_nodesMarker.scale.x = 0.06;
+            m_nodesMarker.scale.y = 0.06;
+            m_nodesMarker.color.a = 4.0;
             m_nodesMarker.color.r = 1.0;
             m_nodesMarker.color.g = 0.0;
             m_nodesMarker.color.b = 0.2;
@@ -95,7 +95,7 @@ class PRM
             m_edgesMarker.action = visualization_msgs::Marker::ADD;
             m_edgesMarker.scale.x = 0.01;
             m_edgesMarker.scale.y = 0.01;
-            m_edgesMarker.color.a = 0.7;
+            m_edgesMarker.color.a = 0.5;
             m_edgesMarker.color.r = 0.6;
             m_edgesMarker.color.g = 0.0;
             m_edgesMarker.color.b = 0.1;
@@ -106,8 +106,8 @@ class PRM
             m_pathMarker.id = 5;
             m_pathMarker.type = visualization_msgs::Marker::LINE_LIST;
             m_pathMarker.action = visualization_msgs::Marker::ADD;
-            m_pathMarker.scale.x = 0.04;
-            m_pathMarker.scale.y = 0.04;
+            m_pathMarker.scale.x = 0.1;
+            m_pathMarker.scale.y = 0.1;
             m_pathMarker.color.a = 1.0;
             m_pathMarker.color.r = 0.0;
             m_pathMarker.color.g = 1.0;
@@ -117,14 +117,46 @@ class PRM
 
         void AddMap(std::vector<int8_t> map, uint32_t width, uint32_t height, double resolution, Point origin)
         {
-            uint32_t mapSize = height*width;
-
+            uint32_t filterHeight = 5;
+            uint32_t filterWidth = 5;
             // Populate map
-            m_map.resize(mapSize);
-            m_collisonMap.resize(mapSize);
-            for (int i = 0; i < mapSize; i++)
+            m_map.resize(height);
+            m_collisionMap.resize(height);
+            for (int i = 0; i < height; i++)
             {
-                m_map[i] = map[i];
+                m_map[i].resize(width);
+                m_collisionMap[i].resize(width);
+                for(int j = 0; j < width; j++)
+                {
+                    m_map[i][j] = map[height*i + j];
+                }
+            }
+
+            // Create expanded map
+            for (int i = 0; i < height; i++)
+            {
+                for(int j = 0; j < width; j++)
+                {
+                    for(int k = filterHeight+i-filterHeight/2; k < filterHeight+i+filterHeight/2; k++)
+                    {
+                        for(int l = filterWidth+j-filterWidth/2; l < filterWidth+j+filterWidth/2; l++)
+                        {
+                            int h = k - filterHeight;
+                            int w = l - filterWidth;
+                            // if((h < 0) || (h > height-1) || (w < 0) || (w > width-1))
+                            if((h < 0) || (h > height-1) || (w < 0) || (w > width-1))
+                            {
+                                continue;
+                            }
+                            if( i == 0 )
+                            {
+                                ROS_INFO("i %d j %d h %d w %d", i, j, h, w);
+                            }
+                            m_collisionMap[h][w] += m_map[i][j];
+                        }
+                    }
+                    
+                }
             }
 
             // Store metadata
@@ -194,10 +226,10 @@ class PRM
 
             // Build Graph
             ROS_INFO("Find shortest path %d", wayPoints.size());
-            BuildGraph(nNodes, 20);
+            BuildGraph(nNodes, 10);
 
             std::vector<Node> globalPath;
-            // Build path to way points
+            // Build path to each way points
             for(int i = 0; i < wayPoints.size(); i++)
             {
                 std::vector<Node> localPath;
@@ -327,8 +359,7 @@ class PRM
 
         bool CheckCollision(int mapX, int mapY)
         {
-            int idx = mapY*m_mapHeight + mapX;
-            return m_map[idx] != 0;
+            return m_collisionMap[mapY][mapX] != 0;
         }
         void BuildGraph(uint32_t nNodes, uint32_t nNeighbours)
         {
@@ -530,8 +561,8 @@ class PRM
         
         }
 
-        std::vector<int8_t> m_map;
-        std::vector<int8_t> m_collisonMap;
+        std::vector<std::vector<int8_t>> m_map;
+        std::vector<std::vector<int8_t>> m_collisionMap;
         std::vector<Node> m_nodes;
         uint32_t m_nWayPoints;
         uint32_t m_nNodes;
@@ -542,6 +573,8 @@ class PRM
         double m_yMin;
         double m_yMax;
         double m_mapResolution;
+        static const int8_t OCCUPIED = 100;
+        static const int8_t UNOCCUPIED = 0;
 
         // Visualization
         ros::Publisher *m_startPublisher;
