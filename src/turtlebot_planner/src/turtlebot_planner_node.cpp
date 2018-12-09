@@ -481,65 +481,82 @@ class PRM
 
         void ShortestPath(uint32_t startIdx, uint32_t goalIdx, std::vector<Node> &path)
         {   
+            uint32_t closedCount = 0;
+            uint32_t openCount = 0;
             std::vector<int> vertices;
             std::vector<bool> open(m_nodes.size());
+            std::vector<bool> closed(m_nodes.size());
             std::vector<int> prev(m_nodes.size());
             std::vector<float> distances(m_nodes.size());
+            std::vector<float> hDistances(m_nodes.size()); // distance with heuristics
             ROS_INFO("Init Shortest");
             for(int i = 0; i < m_nodes.size(); i++)
             {
                 distances[i] = INFINITY;
+                hDistances[i] = INFINITY;
                 prev[i] = -100;
-                open[i] = true;
+                open[i] = false;
+                closed[i] = false;
             }            
 
             ROS_INFO("Start Shortest");
+            open[startIdx] = true;
+            openCount++;
+            hDistances[startIdx] = DistBetweenNodes(m_nodes[startIdx], m_nodes[goalIdx]);
             distances[startIdx] = 0;
-            for (int count = 0; count < open.size()-1; count++) 
+            while (openCount > closedCount) 
             {
                 float minDist = INFINITY;
                 int minIdx = -1;
+                int elementIdx = -1;
                 for(int i = 0; i < open.size(); i++)
                 {
-                    if (open[i] == false)
+                    if(open[i] == false) // Node not in open set
                     {
                         continue;
                     }
 
-                    float dist = distances[i];
+                    float dist = hDistances[i];
                     if (dist <= minDist)
                     {
                         minDist = dist;
                         minIdx = i;
                     }       
                 }
-                // ROS_INFO("Worthy %d %.3f", minIdx, minDist);
-                open[minIdx] = false;
 
-                // If reached target
-                if (minIdx == goalIdx)
+                open[minIdx] = false;
+                closed[minIdx] = true;
+                closedCount++;
+                
+                if (minIdx == goalIdx) // Target reached
                 {
                     break;
                 }
 
                 std::vector<Edge> neighbours = (m_nodes[minIdx]).edges;
-                // ROS_INFO("Number of neighbours %d", neighbours.size());
-                for(int i = 0; i < neighbours.size(); i++)
+                for (int i = 0; i < neighbours.size(); i++)
                 {
                     Edge edge = neighbours[i];
                     uint32_t neighIdx = edge.nodeIdx;
-                    if(open[neighIdx] == false || distances[minIdx] == INFINITY)
+                    if (closed[neighIdx] == true) // Neighbor in closed set
                     {
                         continue;
                     }
 
                     float cost = edge.cost;
                     float dist = distances[minIdx] + cost;
-                    if (dist < distances[neighIdx])
+
+                    if (open[neighIdx] == false) // New node discovered
                     {
-                        distances[neighIdx] = dist;
-                        prev[neighIdx] = minIdx;
+                        open[neighIdx] = true;
+                        openCount++;
+                    } else if (dist > distances[neighIdx])
+                    {
+                        continue;
                     }
+                    distances[neighIdx] = dist;
+                    hDistances[neighIdx] = distances[neighIdx] + DistBetweenNodes(m_nodes[neighIdx], m_nodes[goalIdx]);
+                    prev[neighIdx] = minIdx;
                 }
             }
 
@@ -559,6 +576,11 @@ class PRM
             }
             ROS_INFO("Finished Building");
         
+        }
+
+        float DistBetweenNodes(Node nodeA, Node nodeB)
+        {
+            return sqrt(pow(nodeA.x - nodeB.x, 2) + pow(nodeA.y - nodeB.y, 2));
         }
 
         std::vector<std::vector<int8_t>> m_map;
