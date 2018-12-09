@@ -8,6 +8,11 @@
 #include <geometry_msgs/Twist.h>
 #include <nav_msgs/OccupancyGrid.h>
 #include <visualization_msgs/Marker.h>
+#include <geometry_msgs/PoseWithCovarianceStamped.h>
+#include <gazebo_msgs/ModelStates.h>
+#include <geometry_msgs/Twist.h>
+#include <tf/transform_datatypes.h>
+#include <tf2/LinearMath/Quaternion.h>
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -18,6 +23,162 @@ struct Point
 {
     float x;
     float y;
+};
+
+class Controller
+{
+    public:
+        Controller()
+        : m_pathIndex(0)
+        , m_isPoseSet(false)
+        , m_isPathSet(false)
+        , m_theta(0)
+        {
+            m_Marker.header.frame_id = "/map";
+            m_Marker.header.stamp = ros::Time();
+            m_Marker.ns = "robot";
+            m_Marker.id = 0;
+            m_Marker.type = visualization_msgs::Marker::SPHERE;
+            m_Marker.action = visualization_msgs::Marker::ADD;
+            m_Marker.scale.x = 0.5;
+            m_Marker.scale.y = 0.3;
+            m_Marker.scale.z = 0.1;
+            m_Marker.color.a = 1.0;
+            m_Marker.color.r = 0.0;
+            m_Marker.color.g = 1.0;
+            m_Marker.color.b = 0.0;
+        }
+
+        void poseCallback(const gazebo_msgs::ModelStates &msg)
+        {
+          int i;
+          for (i = 0; i < msg.name.size(); i++)
+              if (msg.name[i] == "mobile_base")
+                  break;
+
+              tf2::Quaternion q;
+              m_curPos.x = msg.pose[i].position.x;
+              m_curPos.y = msg.pose[i].position.y;
+              m_theta = tf::getYaw(msg.pose[i].orientation);
+
+              m_Marker.header.stamp = ros::Time();
+              m_Marker.pose.position.x = m_curPos.x;
+              m_Marker.pose.position.y = m_curPos.y;
+              m_Marker.pose.position.z = 0;
+              q.setRPY(0, 0, m_theta);
+              m_Marker.pose.orientation.w = q.getW();
+              m_Marker.pose.orientation.x = q.getX();
+              m_Marker.pose.orientation.y = q.getY();
+              m_Marker.pose.orientation.z = q.getZ();
+
+              if(m_posePublisher)
+              {
+                m_posePublisher->publish(m_Marker);
+            }
+
+            if (!m_isPoseSet)
+                m_isPoseSet = true;
+        }
+
+        void addPath(std::vector<Point> path)
+        {
+            m_path = path;
+            m_isPathSet = true;
+        }
+
+        void setPublisher(ros::Publisher *posePublisher)
+        {
+            m_posePublisher = posePublisher;
+        }
+
+        bool getControlOutput(float& controlOutput)
+        {
+            struct Point startPoint = m_path[m_path.size() - 1 - m_pathIndex];
+            struct Point nextPoint = m_path[m_path.size() - 2 - m_pathIndex];
+
+            float xDistToNext = nextPoint.x - m_curPos.x;
+            float yDistToNext = nextPoint.y - m_curPos.y;
+            float distToGoal = sqrt(xDistToNext * xDistToNext + yDistToNext * yDistToNext);
+
+            if (distToGoal < 0.25)
+            {
+                m_pathIndex++;
+                if (m_pathIndex >= (m_path.size() - 1))
+                {
+                    return false;
+                }
+
+                startPoint = m_path[m_path.size() - 1 - m_pathIndex];
+                nextPoint = m_path[m_path.size() - 2 - m_pathIndex];
+                
+                while ((fabs(startPoint.x - nextPoint.x) < 0.00001) && (fabs(startPoint.y - nextPoint.y) < 0.00001))
+                {
+                    m_pathIndex++;
+                    if (m_pathIndex >= (m_path.size() - 1))
+                    {
+                        return false;
+                    }
+
+                    startPoint = m_path[m_path.size() - 1 - m_pathIndex];
+                    nextPoint = m_path[m_path.size() - 2 - m_pathIndex];
+                }
+
+                xDistToNext = nextPoint.x - m_curPos.x;
+                yDistToNext = nextPoint.y - m_curPos.y;
+                distToGoal = sqrt(xDistToNext * xDistToNext + yDistToNext * yDistToNext);
+            }
+
+            float dx = nextPoint.x - startPoint.x;
+            float dy = nextPoint.y - startPoint.y;
+
+            float dx1 = m_curPos.x - startPoint.x;
+            float dy1 = m_curPos.y - startPoint.y;
+
+            float dot_product = dy * dy1 + dx * dx1;
+            float norm_squared = dx * dx + dy * dy;
+            float distance = sqrt(norm_squared);
+
+
+            float distanceDeCarrotte = 0.25;
+            struct Point pointLaPlusProche;
+            pointLaPlusProche.x = startPoint.x + dot_product / norm_squared * dx;
+            pointLaPlusProche.y = startPoint.y + dot_product / norm_squared * dy;
+
+            float distanceAParcourir = sqrt((nextPoint.x - pointLaPlusProche.x) * (nextPoint.x - pointLaPlusProche.x) + (nextPoint.y - pointLaPlusProche.y) * (nextPoint.y - pointLaPlusProche.y));
+            struct Point pointDeCarrotte;
+            pointDeCarrotte.x = pointLaPlusProche.x + std::min(distanceDeCarrotte, distanceAParcourir) / distance * dx;
+            pointDeCarrotte.y = pointLaPlusProche.y + std::min(distanceDeCarrotte, distanceAParcourir) / distance * dy;
+
+            float angleDErreur = std::fmod((atan2(pointDeCarrotte.y - m_curPos.y, pointDeCarrotte.x - m_curPos.x) - m_theta),(2 * M_PI));
+
+            if (angleDErreur > M_PI)
+            {
+                angleDErreur -= 2*M_PI;
+            }
+            else if (angleDErreur < -1*M_PI)
+            {
+                angleDErreur += 2*M_PI;
+            }
+            ROS_INFO("Index %d", m_pathIndex);
+
+            ROS_INFO("Error %f\n current theta %f\n line angle %f\n Start: %f %f\n End: %f %f\n Current: %f %f\n Distance to goal: %f\n", angleDErreur, m_theta, atan2(dy, dx), startPoint.x, startPoint.y, nextPoint.x, nextPoint.y, m_curPos.x, m_curPos.y, distToGoal);
+            float kp = 3;
+
+            controlOutput = kp * angleDErreur;
+
+            return true;
+        }
+
+    private: 
+        std::vector<struct Point> m_path;
+        uint8_t m_pathIndex;
+        struct Point m_curPos;
+        float m_theta;
+        bool m_isPoseSet;
+        bool m_isPathSet;
+        ros::Publisher *m_posePublisher;
+        visualization_msgs::Marker m_Marker;
+
 };
 
 class PRM
@@ -117,8 +278,8 @@ class PRM
 
         void AddMap(std::vector<int8_t> map, uint32_t width, uint32_t height, double resolution, Point origin)
         {
-            uint32_t filterHeight = 5;
-            uint32_t filterWidth = 5;
+            uint32_t filterHeight = 8;
+            uint32_t filterWidth = 8;
             // Populate map
             m_map.resize(height);
             m_collisionMap.resize(height);
@@ -152,7 +313,12 @@ class PRM
                             {
                                 ROS_INFO("i %d j %d h %d w %d", i, j, h, w);
                             }
-                            m_collisionMap[h][w] += m_map[i][j];
+
+                            if(m_map[i][j] == OCCUPIED)
+                            {
+                                m_collisionMap[h][w] = OCCUPIED;
+                            }
+                            
                         }
                     }
                     
@@ -169,7 +335,7 @@ class PRM
             m_yMax =  origin.y + height * resolution;
         }
         
-        void GetPath(Point start, std::vector<Point> goals, uint32_t nNodes, double maxDist)
+        void GetPath(Point start, std::vector<Point> goals, uint32_t nNodes, std::vector<Point> &path)
         {  
             ROS_INFO("Get path entry");
             Node node;
@@ -252,7 +418,11 @@ class PRM
                 m_pathMarker.points.push_back(p2);
                 ROS_INFO("Path 1 -> %.3f, %3f", p1.x, p1.y);
                 ROS_INFO("Path 2 -> %.3f, %3f", p2.x, p2.y);
+
+                path.push_back({p1.x, p1.y});
             }
+
+            path.push_back({globalPath[globalPath.size() - 1].x, globalPath[globalPath.size() - 1].y});
             if(m_pathPublisher)
             {
                 m_pathPublisher->publish(m_pathMarker);
@@ -661,9 +831,24 @@ int main(int argc, char **argv)
 
     planner.SetPublishers(&startPublisher, &goalPublisher, &nodesPublisher, &edgesPublisher, &pathPublisher);
 
+    // Controller Initialization
+    Controller controller;
+    ros::Subscriber pose_sub;
+    pose_sub = n.subscribe("/gazebo/model_states", 1, &Controller::poseCallback, &controller);
+
+    ros::Publisher velocityPublisher = n.advertise<geometry_msgs::Twist>("/cmd_vel_mux/input/teleop", 1);
+    ros::Publisher posePublisher = n.advertise<visualization_msgs::Marker>( "/robotMeasurement", 0 );
+    geometry_msgs::Twist vel;
+
+    controller.setPublisher(&posePublisher);
     //Set the loop rate
     ros::Rate loop_rate(10);    //20Hz update rate
-    int done = false;
+    bool pathFound = false;
+    bool donePath = false;
+
+
+
+    std::vector<Point> path;
     while (ros::ok())
     {
     	ros::spinOnce();   //Check for new messages
@@ -672,12 +857,39 @@ int main(int argc, char **argv)
             continue;
         }
 
-        if(!done)
+        if(!pathFound)
         {
-            std::vector<Point> goals = {{4, 0}, {8,-4}, {8, 0}};
-            planner.GetPath({0, 0}, goals, 600, 5);
-            done = true;
+            std::vector<Point> goals = {{8,-4}, {8, 0}, {4, 0},};
+            planner.GetPath({0, 0}, goals, 600, path);
+            pathFound = true;
+
+            controller.addPath(path);
         }
+        else
+        {
+            float angularVelocity = 0;
+
+            if (!donePath)
+            {
+                if (controller.getControlOutput(angularVelocity))
+                {
+                    // output control
+                    vel.linear.x = 0.3;
+                    vel.angular.z = angularVelocity;
+                    velocityPublisher.publish(vel); // Publish the command velocity
+                }
+                else
+                {
+                    ROS_INFO("Done path\n");
+                    // output control
+                    vel.linear.x = 0;
+                    vel.angular.z = 0;
+                    velocityPublisher.publish(vel); // Publish the command velocity
+                    donePath = true;
+                }
+            }
+        }
+
         loop_rate.sleep(); //Maintain the loop rate
     }
     return 0;
